@@ -13,7 +13,7 @@ class CmdVelSubscriber : public rclcpp::Node
     : Node("minimal_subscriber")
     {
       subscription_cmd_vel_ = this->create_subscription<geometry_msgs::msg::Twist>(
-            "/cmd_vel", 10,
+            "wcr/cmd_vel", 10,
             std::bind(&CmdVelSubscriber::cmdVelCallback, this, std::placeholders::_1));
       driving_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
             "/driving_velocity_controller/commands", 10);
