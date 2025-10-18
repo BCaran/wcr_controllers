@@ -75,8 +75,9 @@ class TrajectoryPublisher : public rclcpp::Node
         tf_q.setRPY(0.0, 0.0, theta_d);
         msg.pose.pose.orientation = tf2::toMsg(tf_q);
 
-        msg.twist.twist.linear.x = v_x_d;
-        msg.twist.twist.linear.y = v_y_d;
+        // velocities are in base_link frame
+        msg.twist.twist.linear.x = v_x_d * cos(theta_d) + v_y_d * sin(theta_d);
+        msg.twist.twist.linear.y = -v_x_d * sin(theta_d) + v_y_d * cos(theta_d);
         msg.twist.twist.angular.z = omega_d;
 
         pub_->publish(msg);

@@ -25,6 +25,9 @@ ament_target_dependencies(inv_kin_controller rclcpp std_msgs geometry_msgs std_s
 add_executable(trajectory_generator src/trajectory_generator.cpp)
 ament_target_dependencies(trajectory_generator rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs)
 
+add_executable(model_based_controller src/model_based_controller.cpp)
+ament_target_dependencies(model_based_controller rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs)
+
 install(TARGETS
   inv_kin_controller
   trajectory_generator
