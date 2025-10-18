@@ -15,12 +15,19 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 
 add_executable(inv_kin_controller src/inv_kin_controller.cpp)
 ament_target_dependencies(inv_kin_controller rclcpp std_msgs geometry_msgs std_srvs)
 
+add_executable(trajectory_generator src/trajectory_generator.cpp)
+ament_target_dependencies(trajectory_generator rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs)
+
 install(TARGETS
   inv_kin_controller
+  trajectory_generator
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
