@@ -31,6 +31,7 @@ ament_target_dependencies(model_based_controller rclcpp std_msgs geometry_msgs s
 install(TARGETS
   inv_kin_controller
   trajectory_generator
+  model_based_controller
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
