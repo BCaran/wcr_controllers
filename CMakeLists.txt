@@ -28,10 +28,14 @@ ament_target_dependencies(trajectory_generator rclcpp std_msgs geometry_msgs std
 add_executable(model_based_controller src/model_based_controller.cpp)
 ament_target_dependencies(model_based_controller rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs)
 
+add_executable(torque_controller src/torque_model_based_controller.cpp)
+ament_target_dependencies(torque_controller rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs)
+
 install(TARGETS
   inv_kin_controller
   trajectory_generator
   model_based_controller
+  torque_controller
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
