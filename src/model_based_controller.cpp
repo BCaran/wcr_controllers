@@ -46,9 +46,9 @@ public:
         this->declare_parameter("y_w_4", -0.1125);
         this->declare_parameter("r_w_4", 0.0254);
 
-        this->declare_parameter("Kp_x", 5.0);
-        this->declare_parameter("Kp_y", 5.0);
-        this->declare_parameter("Kp_th", 2.0);
+        this->declare_parameter("Kp_x", 100.0);
+        this->declare_parameter("Kp_y", 100.0);
+        this->declare_parameter("Kp_th", 5.0);
 
         RCLCPP_INFO(this->get_logger(), "ModelBasedController node started");
     }
@@ -104,11 +104,19 @@ private:
         double x_w[4] = {this->get_parameter("x_w_1").as_double(), this->get_parameter("x_w_2").as_double(), this->get_parameter("x_w_3").as_double(), this->get_parameter("x_w_4").as_double()};
         double y_w[4] = {this->get_parameter("y_w_1").as_double(), this->get_parameter("y_w_2").as_double(), this->get_parameter("y_w_3").as_double(), this->get_parameter("y_w_4").as_double()};
         double r_w[4] = {this->get_parameter("r_w_1").as_double(), this->get_parameter("r_w_2").as_double(), this->get_parameter("r_w_3").as_double(), this->get_parameter("r_w_4").as_double()};
+        Kp_x_ = this->get_parameter("Kp_x").as_double();
+        Kp_y_ = this->get_parameter("Kp_y").as_double();
+        Kp_th_ = this->get_parameter("Kp_th").as_double();
 
         double v_x_i[4], v_y_i[4], v_d_i[4], delta_d_i[4];
         double a[4], b[4], omega_c_i[4], delta_c_i[4];
         double max_angular_speed = (210*0.229) * ((2.0*M_PI)/60.0);
         double maxQuotien = 0.0;
+        RCLCPP_INFO(this->get_logger(), "Error X: %f", e_x);
+        RCLCPP_INFO(this->get_logger(), "Error Y: %f", e_y);
+        RCLCPP_INFO(this->get_logger(), "Correction X: %f", e_x*Kp_x_);
+        RCLCPP_INFO(this->get_logger(), "Correciton Y: %f", e_y*Kp_x_);
+
 
         for(int i=0;i<4;i++){
           //transform trajectory from cartesian space to robot joint space
