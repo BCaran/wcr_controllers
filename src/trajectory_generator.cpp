@@ -2,6 +2,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <cmath>
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -35,7 +36,7 @@ class TrajectoryPublisher : public rclcpp::Node
         if (trajectory_type_ == "circle")
         {
             double r = 1.0;
-            double v = 0.2;
+            double v = (2 * M_PI)/80;
 
             x_d     = r * sin(v * t);
             y_d     = r - r * cos(v * t);
