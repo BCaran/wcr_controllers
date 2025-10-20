@@ -36,11 +36,14 @@ class TrajectoryPublisher : public rclcpp::Node
         {
             double r = 1.0;
             double v = 0.2;
-            x_d = r * cos(v * t);
-            y_d = r * sin(v * t);
-            v_x_d = -r * v * sin(v * t);
-            v_y_d =  r * v * cos(v * t);
-            theta_d = atan2(v_y_d, v_x_d);
+
+            x_d     = r * sin(v * t);
+            y_d     = r - r * cos(v * t);
+
+            v_x_d   = r * v * cos(v * t);
+            v_y_d   = r * v * sin(v * t);
+
+            theta_d = atan2(v_y_d, v_x_d);  // same as v*t
             omega_d = v;
         }
         else if (trajectory_type_ == "eight")
