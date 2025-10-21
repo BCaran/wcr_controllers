@@ -1,5 +1,9 @@
 #include <cmath>
 #include <unordered_map>
+#include <Eigen/Dense>
+#include <iostream>
+#include <cmath>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -9,31 +13,31 @@
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "sensor_msgs/msg/joint_state.hpp"
 
-class ModelBasedController : public rclcpp::Node
+using Eigen::Matrix3d;
+using Eigen::Vector3d;
+
+class TorqueModelBasedController : public rclcpp::Node
 {
 public:
-    ModelBasedController()
+    TorqueModelBasedController()
     : Node("trajectory_follower")
     {
         // sub
         desired_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "wcr/desired_trajectory", 10,
-            std::bind(&ModelBasedController::desired_callback, this, std::placeholders::_1));
+            std::bind(&TorqueModelBasedController::desired_callback, this, std::placeholders::_1));
 
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "wcr/odom", 10,
-            std::bind(&ModelBasedController::odom_callback, this, std::placeholders::_1));
+            std::bind(&TorqueModelBasedController::odom_callback, this, std::placeholders::_1));
 
         joint_states_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
           "joint_states", 10, 
-          std::bind(&ModelBasedController::joint_states_callback, this, std::placeholders:: _1));
+          std::bind(&TorqueModelBasedController::joint_states_callback, this, std::placeholders:: _1));
 
         // pub
-        driving_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
-            "/driving_velocity_controller/commands", 10);
-
-        steering_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
-            "/steering_position_controller/commands", 10);
+        torque_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/forward_effort_controller/commands", 10);
 
         // parameters
         this->declare_parameter("x_w_1", 0.1125);
@@ -48,42 +52,26 @@ public:
         this->declare_parameter("Kp_y", 5.0);
         this->declare_parameter("Kp_th", 2.0);
 
-        RCLCPP_INFO(this->get_logger(), "ModelBasedController node started");
-    }
-    ~ModelBasedController()
-    {
-      RCLCPP_INFO(this->get_logger(), "Shutting down, sending zero commands...");
-
-      std_msgs::msg::Float64MultiArray zero_drive;
-      std_msgs::msg::Float64MultiArray zero_steer;
-
-      // Four wheels → push 4 zeros
-      zero_drive.data = {0.0, 0.0, 0.0, 0.0};
-      zero_steer.data = {0.0, 0.0, 0.0, 0.0};
-
-      driving_pub_->publish(zero_drive);
-      steering_pub_->publish(zero_steer);
-
-      rclcpp::spin_some(this->get_node_base_interface());
-      rclcpp::sleep_for(std::chrono::milliseconds(200));
-    }
-    void sendZeroCommands()
-    {
-        std_msgs::msg::Float64MultiArray zero_drive;
-        std_msgs::msg::Float64MultiArray zero_steer;
-
-        zero_drive.data = {0.0, 0.0, 0.0, 0.0};
-        zero_steer.data = {0.0, 0.0, 0.0, 0.0};
-
-        driving_pub_->publish(zero_drive);
-        steering_pub_->publish(zero_steer);
-
-        RCLCPP_INFO(this->get_logger(), "Published zero commands");
+        RCLCPP_INFO(this->get_logger(), "TorqueModelBasedController node started");
     }
 
 private:
     void desired_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
     {
+        if (desired_callback_first_time_)
+        {
+            last_trajectory_msg_ = msg;
+            desired_callback_first_time_ = false;
+        }
+
+        rclcpp::Time current_time = msg->header.stamp;
+        rclcpp::Time last_time = last_trajectory_msg_->header.stamp;
+        double dt = (current_time - last_time).seconds();
+
+        last_trajectory_msg_ = msg;
+
+        RCLCPP_INFO(this->get_logger(), "dt: %f", dt);
+
         double roll_d, pitch_d, yaw_d;
         quaternionToEuler(msg->pose.pose.orientation, roll_d, pitch_d, yaw_d);
         double x_d = msg->pose.pose.position.x;
@@ -107,10 +95,11 @@ private:
         Kp_th_ = this->get_parameter("Kp_th").as_double();
 
         double v_x_i[2], v_y_i[2], v_d_i[2], delta_d_i[2];
-        double a[4], b[4], omega_c_i[4], delta_c_i[4];
-        double max_angular_speed = (210*0.229) * ((2.0*M_PI)/60.0);
+        double a[4], b[4], v_c_i[4], delta_c_i[4];
+        double max_linear_speed = ((210*0.229) * ((2.0*M_PI)/60.0)) * r_w[0];
         double maxQuotien = 0.0;
 
+        //Kinematic controller
         for(int i=0;i<2;i++){
           //transform trajectory from cartesian space to robot joint space
           v_x_i[i] = v_x_d - y_w[i] * omega_d;
@@ -121,36 +110,50 @@ private:
           a[i] = v_d_i[i] * cos(delta_d_i[i]) + Kp_x_ * e_x - Kp_th_ * y_w[i] * e_th;
           b[i] = v_d_i[i] * sin(delta_d_i[i]) + Kp_y_ * e_y + Kp_th_ * x_w[i] * e_th;
 
-          omega_c_i[i] = (sqrt(a[i] * a[i] + b[i] * b[i])) / r_w[i];
+          v_c_i[i] = (sqrt(a[i] * a[i] + b[i] * b[i]));
           delta_c_i[i] = atan2(b[i], a[i]);
-          double quotien=std::abs(omega_c_i[i]/max_angular_speed);
+          double quotien=std::abs(v_c_i[i]/max_linear_speed);
           if (quotien >= maxQuotien)
             maxQuotien = quotien;
         }
 
         if (maxQuotien > 1.0){
           for(int i=0; i<4; i++){
-            omega_c_i[i] /= maxQuotien;
+            v_c_i[i] /= maxQuotien;
         }
         }
 
         double returnValueTemp[2];
-        std_msgs::msg::Float64MultiArray omega_i_msg;
-        std_msgs::msg::Float64MultiArray delta_i_msg;
+        std_msgs::msg::Float64MultiArray torque_msg;
 
-        optimiseSpeedAngle(returnValueTemp, omega_c_i[0], delta_c_i[0]);
-        double omega_f = returnValueTemp[0];
-        double delta_f = returnValueTemp[1];
+        optimiseSpeedAngle(returnValueTemp, v_c_i[0], delta_c_i[0]);
+        double v_1_d = returnValueTemp[0];
+        double delta_f_d = returnValueTemp[1];
 
-        optimiseSpeedAngle(returnValueTemp, omega_c_i[1], delta_c_i[1]);
-        double omega_r = returnValueTemp[0];
-        double delta_r = returnValueTemp[1]; 
+        optimiseSpeedAngle(returnValueTemp, v_c_i[1], delta_c_i[1]);
+        //double v_r = returnValueTemp[0];
+        double delta_r_d = returnValueTemp[1];
+        //End of kinematic controller--------------------------------------------------------- 
 
-        omega_i_msg.data = {omega_f, omega_f, omega_f, omega_f};
-        delta_i_msg.data = {delta_f, delta_r, delta_r, delta_f};
+        //Preparing vectors for torque controller
+        v_d_(0) = v_1_d;
+        v_d_(1) = (delta_f_d - last_delta_f_c_) / dt;
+        v_d_(2) = (delta_r_d - last_delta_r_c_) / dt;
 
-        steering_pub_->publish(delta_i_msg);
-        driving_pub_->publish(omega_i_msg);
+        dotv_d_(0) = (last_v_1_ - v_1_d) / dt;
+        dotv_d_(1) = (delta_f_d - last_delta_f_c_) / (dt*dt);
+        dotv_d_(2) = (delta_r_d - last_delta_r_c_) / (dt*dt);
+
+        last_v_1_ = v_1_d;
+        last_delta_f_c_ = delta_f_d;
+        last_delta_r_c_ = delta_r_d;
+
+        Vector3d tau = calculateTorques(delta_f_, delta_r_, omega_f_, omega_r_, v_, dotv_, v_d_, dotv_d_);
+
+        std_msgs::msg::Float64MultiArray command_torque_msg;
+        command_torque_msg.data = {tau(0), tau(0), tau(0), tau(0), tau(1), tau(2), tau(2), tau(1)};
+        torque_pub_->publish(command_torque_msg);
+
     }
 
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -172,10 +175,28 @@ private:
           for (size_t i = 0; i < msg->name.size(); ++i) {
               joint_index_[msg->name[i]] = i;
           }
+          last_msg_ = msg;
+          return;
       }
+      // compute dt
+      rclcpp::Time current_time = msg->header.stamp;
+      rclcpp::Time last_time = last_msg_->header.stamp;
+      double dt = (current_time - last_time).seconds();
+
+      
       delta_f_ = msg->position[joint_index_["FL_steering"]];
       delta_r_ = msg->position[joint_index_["FR_steering"]];
-      v_ = msg->velocity[joint_index_["FL_wheel"]] * this->get_parameter("r_w_1").as_double(); //pomozni s r
+      omega_f_ = msg->velocity[joint_index_["FL_steering"]];
+      omega_r_ = msg->velocity[joint_index_["FR_steering"]];
+      v_(0) = msg->velocity[joint_index_["FL_wheel"]] * this->get_parameter("r_w_1").as_double(); //pomozni s r
+      v_(1) = msg->velocity[joint_index_["FL_steering"]];
+      v_(2) = msg->velocity[joint_index_["FR_steering"]];
+
+      dotv_(0) = ((msg->velocity[joint_index_["FL_wheel"]] - last_msg_->velocity[joint_index_["FL_wheel"]]) * this->get_parameter("r_w_1").as_double()) / dt;
+      dotv_(1) = (msg->velocity[joint_index_["FL_steering"]] - last_msg_->velocity[joint_index_["FL_steering"]]) / dt;
+      dotv_(2) = (msg->velocity[joint_index_["FR_steering"]] - last_msg_->velocity[joint_index_["FR_steering"]]) / dt;
+
+      last_msg_ = msg;
     }
 
     void quaternionToEuler(const geometry_msgs::msg::Quaternion &q, double &roll, double &pitch, double &yaw)
@@ -214,51 +235,120 @@ private:
       }
     }
 
-    void calculateTorques(double delta_f, double delta_r, double v){
-      //Robot parameters
-      double r = this->get_parameter("r_w_1").as_double();
-      double a = this->get_parameter("x_w_1").as_double();
-      double b = this->get_parameter("y_w_1").as_double();
-      double m = this->get_parameter("robot_mass").as_double();
-      double m_w = this->get_parameter("wheel_mass").as_double();
-      double I_theta = (m*((2*a)*(2*a)+(2*b)*(2*b)))/12;
-      double I_w = 0.5*m_w*r*r;
-      double I_delta = 0.002;
+    Vector3d calculateTorques(
+    double delta_f, double delta_r, double omega_f, double omega_r,
+    const Vector3d& v, const Vector3d& dotv, const Vector3d& v_d, 
+    const Vector3d& dotv_d)
+    {
+        // Robot parameters
+        double r = 0.0254;
+        double a = 0.1125;
+        double b = 0.1125;
+        double m = (3950.0 + 1240.0) * 1e-3;
+        double m_w = 0.03203;
+        double I_theta = m * ((2*a)*(2*a) + (2*b)*(2*b)) / 12.0;
+        double I_w = 0.5 * m_w * r * r;
+        double I_delta = 0.002;
 
-      double I_b = I_theta + 4*m_w*(a*a + b*b);
-      double S = a*a + b*b;
-      double D = 4*S;
+        double I_b = I_theta + 4*m_w*(a*a + b*b);
+        double S = a*a + b*b;
+        double D = 4*S;
 
-      double W1 = (-b*cos(delta_f))
+        // Precompute cos/sin
+        double c1 = cos(delta_f), s1 = sin(delta_f);
+        double c2 = cos(delta_r), s2 = sin(delta_r);
+
+        // Wi
+        double W1 = (-b*c1 + a*s1) / D;
+        double W2 = (-b*c2 - a*s2) / D;
+        double W3 = ( b*c2 - a*s2) / D;
+        double W4 = ( b*c1 + a*s1) / D;
+
+        double sumW = W1 + W2 + W3 + W4;
+        double sumc = 2*(c1 + c2);
+        double sums = 2*(s1 + s2);
+
+        // Mass matrix M
+        double M11 = I_b*sumW*sumW + (m/16.0)*(sumc*sumc + sums*sums) + 4*I_w/(r*r);
+        Matrix3d M = Matrix3d::Zero();
+        M(0,0) = M11;
+        M(1,1) = 2*I_delta;
+        M(2,2) = 2*I_delta;
+
+        // Derivatives of Wi, ci, si
+        double dotW1 = ( b*sin(delta_f) + a*cos(delta_f)) * omega_f / D;
+        double dotW2 = ( b*sin(delta_r) - a*cos(delta_r)) * omega_r / D;
+        double dotW3 = (-b*sin(delta_r) - a*cos(delta_r)) * omega_r / D;
+        double dotW4 = (-b*sin(delta_f) + a*cos(delta_f)) * omega_f / D;
+
+        double dotsumW = dotW1 + dotW2 + dotW3 + dotW4;
+        double dotsumc = 2*(-s1*omega_f - s2*omega_r);
+        double dotsums = 2*( c1*omega_f + c2*omega_r);
+
+        // V matrix
+        double V11 = I_b*(sumW*dotsumW) + (m/16.0)*(sumc*dotsumc + sums*dotsums);
+        Matrix3d V = Matrix3d::Zero();
+        V(0,0) = V11;
+
+        // N matrix
+        double sumxy = 2*a*(s1 - s2);
+        double N11 = (1/r)*(sumW*sumxy + 0.25*(sumc*sumc + sums*sums) + 4);
+        Matrix3d N = Matrix3d::Zero();
+        N(0,0) = N11;
+        N(1,1) = 2;
+        N(2,2) = 2;
+
+        // PD gains
+        Matrix3d Kp = Matrix3d::Zero();
+        Kp(0,0) = 500; Kp(1,1) = 95; Kp(2,2) = 95;
+        Matrix3d Kd = Matrix3d::Zero();
+        Kd(0,0) = 5; Kd(1,1) = 5.5; Kd(2,2) = 5.5;
+
+        // Dynamics with PD+FF
+        //Vector3d dotv = (M + N*Kd).ldlt().solve(
+        //    M*dotv_d + V*(v_d - v) - N*Kp*(v - v_d) + N*Kd*dotv_d
+        //);
+
+        Vector3d tau = -Kp*(v - v_d) - Kd*(dotv - dotv_d) +
+                      N.ldlt().solve(M*dotv_d + V*v_d);
+
+        return tau;
     }
 
     // sub
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr desired_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr joint_states_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
 
     // pub
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr driving_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr steering_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
 
     // state variables
     double x_, y_, theta_;
     double v_x_, v_y_, omega_;
     double Kp_x_, Kp_y_, Kp_th_;
-    double delta_f_, delta_r_, v_;
+    double delta_f_, delta_r_, omega_f_, omega_r_;
+    double last_v_1_ = 0.0;
+    double last_delta_f_c_ = 0.0;
+    double last_delta_r_c_ = 0.0;
+    bool desired_callback_first_time_ = true;
 
     std::unordered_map<std::string, size_t> joint_index_;
+    sensor_msgs::msg::JointState::SharedPtr last_msg_;
+    nav_msgs::msg::Odometry::SharedPtr last_trajectory_msg_;
+
+    Eigen::Vector3d v_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d dotv_ = Eigen::Vector3d::Zero();
+
+    Eigen::Vector3d v_d_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d dotv_d_ = Eigen::Vector3d::Zero();
     
 };
 
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<ModelBasedController>());
-    auto node = std::make_shared<ModelBasedController>();
-    rclcpp::on_shutdown([node]() {
-        node->sendZeroCommands();
-        rclcpp::sleep_for(std::chrono::milliseconds(200));
-    });
+    rclcpp::spin(std::make_shared<TorqueModelBasedController>());
+    auto node = std::make_shared<TorqueModelBasedController>();
     return 0;
 }
