@@ -32,6 +32,7 @@ class TrajectoryPublisher : public rclcpp::Node
         double t = (this->now() - start_time_).seconds();
         double x_d = 0.0, y_d = 0.0, theta_d = 0.0;
         double v_x_d = 0.0, v_y_d = 0.0, omega_d = 0.0;
+        double theta_d_unwrapped;
 
         if (trajectory_type_ == "circle")
         {
@@ -45,6 +46,7 @@ class TrajectoryPublisher : public rclcpp::Node
             v_y_d   = r * v * sin(v * t);
 
             theta_d = atan2(v_y_d, v_x_d);  // same as v*t
+            //theta_d_unwrapped = unwrapAngle(theta_d, theta_prev_, offset_);
             omega_d = v;
         }
         else if (trajectory_type_ == "eight")
@@ -86,10 +88,25 @@ class TrajectoryPublisher : public rclcpp::Node
 
         pub_->publish(msg);
     }
+
+    double unwrapAngle(double theta, double &theta_prev, double &offset) {
+      // Detect jump across -pi/pi
+      double diff = theta - theta_prev;
+      if (diff > M_PI) {
+          offset -= 2.0 * M_PI;
+      } else if (diff < -M_PI) {
+          offset += 2.0 * M_PI;
+      }
+
+      theta_prev = theta;
+      return theta + offset;
+    }
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_;
     rclcpp::TimerBase::SharedPtr timer_;
     std::string trajectory_type_;
     rclcpp::Time start_time_;
+    double theta_prev_ = 0.0;
+    double offset_ = 0.0;
 };
 
 int main(int argc, char * argv[])
