@@ -21,6 +21,7 @@ find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
 
+
 add_executable(inv_kin_controller src/inv_kin_controller.cpp)
 ament_target_dependencies(inv_kin_controller rclcpp std_msgs geometry_msgs std_srvs)
 
@@ -30,6 +31,9 @@ ament_target_dependencies(trajectory_generator rclcpp std_msgs geometry_msgs std
 add_executable(model_based_controller src/model_based_controller.cpp)
 ament_target_dependencies(model_based_controller rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs)
 
+add_executable(model_based_controller_velocity src/model_based_controller_velocity.cpp)
+ament_target_dependencies(model_based_controller_velocity rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs sensor_msgs)
+
 add_executable(torque_controller src/torque_model_based_controller.cpp)
 ament_target_dependencies(torque_controller rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs sensor_msgs)
 
@@ -37,6 +41,7 @@ install(TARGETS
   inv_kin_controller
   trajectory_generator
   model_based_controller
+  model_based_controller_velocity
   torque_controller
   DESTINATION lib/${PROJECT_NAME})
 
