@@ -46,9 +46,9 @@ public:
         this->declare_parameter("y_w_4", -0.1125);
         this->declare_parameter("r_w_4", 0.0254);
 
-        this->declare_parameter("Kp_x", 100.0);
-        this->declare_parameter("Kp_y", 100.0);
-        this->declare_parameter("Kp_th", 5.0);
+        this->declare_parameter("Kp_x", 5.0);
+        this->declare_parameter("Kp_y", 5.0);
+        this->declare_parameter("Kp_th", 2.0);
 
         RCLCPP_INFO(this->get_logger(), "ModelBasedController node started");
     }
@@ -112,10 +112,7 @@ private:
         double a[4], b[4], omega_c_i[4], delta_c_i[4];
         double max_angular_speed = (210*0.229) * ((2.0*M_PI)/60.0);
         double maxQuotien = 0.0;
-        RCLCPP_INFO(this->get_logger(), "Error X: %f", e_x);
-        RCLCPP_INFO(this->get_logger(), "Error Y: %f", e_y);
-        RCLCPP_INFO(this->get_logger(), "Correction X: %f", e_x*Kp_x_);
-        RCLCPP_INFO(this->get_logger(), "Correciton Y: %f", e_y*Kp_x_);
+        
 
 
         for(int i=0;i<4;i++){
@@ -148,6 +145,11 @@ private:
           omega_i_msg.data.push_back(returnValueTemp[0]);
           delta_i_msg.data.push_back(returnValueTemp[1]);
         }
+        RCLCPP_INFO(this->get_logger(), "FL steering angle d: %f", delta_i_msg.data[0]);
+        RCLCPP_INFO(this->get_logger(), "BL steering angle d: %f", delta_i_msg.data[1]);
+        RCLCPP_INFO(this->get_logger(), "BR steering angle d: %f", delta_i_msg.data[2]);
+        RCLCPP_INFO(this->get_logger(), "FR steering angle d: %f", delta_i_msg.data[3]);
+
         driving_pub_->publish(omega_i_msg);
         steering_pub_->publish(delta_i_msg);
     }

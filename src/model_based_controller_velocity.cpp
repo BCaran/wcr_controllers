@@ -87,10 +87,10 @@ private:
         double a[4], b[4], omega_c_i[4], delta_c_i[4], dot_delta_c_i[4];
         double max_angular_speed = (210*0.229) * ((2.0*M_PI)/60.0);
         double maxQuotien = 0.0;
-        RCLCPP_INFO(this->get_logger(), "Error X: %f", e_x);
-        RCLCPP_INFO(this->get_logger(), "Error Y: %f", e_y);
-        RCLCPP_INFO(this->get_logger(), "Correction X: %f", e_x*Kp_x_);
-        RCLCPP_INFO(this->get_logger(), "Correciton Y: %f", e_y*Kp_x_);
+        //RCLCPP_INFO(this->get_logger(), "Error X: %f", e_x);
+        //RCLCPP_INFO(this->get_logger(), "Error Y: %f", e_y);
+        //RCLCPP_INFO(this->get_logger(), "Correction X: %f", e_x*Kp_x_);
+        //RCLCPP_INFO(this->get_logger(), "Correciton Y: %f", e_y*Kp_x_);
 
 
         for(int i=0;i<4;i++){
@@ -103,13 +103,15 @@ private:
           a[i] = v_d_i[i] * cos(delta_d_i[i]) + Kp_x_ * e_x - Kp_th_ * y_w[i] * e_th;
           b[i] = v_d_i[i] * sin(delta_d_i[i]) + Kp_y_ * e_y + Kp_th_ * x_w[i] * e_th;
 
+          //calculating steering angle and driving velocity
           omega_c_i[i] = (sqrt(a[i] * a[i] + b[i] * b[i])) / r_w[i];
           delta_c_i[i] = atan2(b[i], a[i]);
+
+          //checking if velocity is higher then maximum motor velocity
           double quotien=std::abs(omega_c_i[i]/max_angular_speed);
           if (quotien >= maxQuotien)
             maxQuotien = quotien;
-          
-          dot_delta_c_i[i] = dot_delta_i_[i] - Kp_delta_*(delta_c_i[i] - delta_i_[i]);
+          //dot_delta_c_i[i] = dot_delta_i_[i] - Kp_delta_*(delta_c_i[i] - delta_i_[i]);
         }
 
         if (maxQuotien > 1.0){
@@ -118,22 +120,21 @@ private:
           }
         }
 
-        double returnValueTemp[2];
+        double sendingValuesTemp[8] = {0, 0, 0, 0, 0, 0, 0, 0};
         std_msgs::msg::Float64MultiArray velocity_msg;
-        for(int i = 0; i <4; i++)
-          velocity_msg.data.push_back(omega_c_i[i]);
+        double returnValueTemp[2];
+        for(int i =0;i<4;i++){
+          optimiseSpeedAngle(returnValueTemp, omega_c_i[i], delta_c_i[i]);
+          sendingValuesTemp[i] = returnValueTemp[0];
+          dot_delta_c_i[i] = dot_delta_i_[i] - Kp_delta_*(returnValueTemp[1] - delta_i_[i]);
+          sendingValuesTemp[i+4] = dot_delta_c_i[i];
+          
+        }
+        velocity_msg.data.resize(8);
+        velocity_msg.data.assign(sendingValuesTemp, sendingValuesTemp + 8);
 
-        for(int i = 0; i <4; i++)
-          velocity_msg.data.push_back(dot_delta_c_i[i]);
 
         velocity_pub_->publish(velocity_msg);
-
-        for(int i=0;i<4;i++){
-          optimiseSpeedAngle(returnValueTemp, omega_c_i[i], delta_c_i[i]);
-          omega_i_msg.data.push_back(returnValueTemp[0]);
-          delta_i_msg.data.push_back(returnValueTemp[1]);
-        }
-        
         
     }
 
@@ -144,14 +145,14 @@ private:
           }
       }
       delta_i_[0] = msg->position[joint_index_["FL_steering"]];
-      delta_i_[1] = msg->position[joint_index_["FL_steering"]];
-      delta_i_[2] = msg->position[joint_index_["BL_steering"]];
-      delta_i_[3] = msg->position[joint_index_["BR_steering"]];
+      delta_i_[1] = msg->position[joint_index_["BL_steering"]];
+      delta_i_[2] = msg->position[joint_index_["BR_steering"]];
+      delta_i_[3] = msg->position[joint_index_["FR_steering"]];
 
       dot_delta_i_[0] = msg->velocity[joint_index_["FL_steering"]];
-      dot_delta_i_[1] = msg->velocity[joint_index_["FL_steering"]];
-      dot_delta_i_[2] = msg->velocity[joint_index_["BL_steering"]];
-      dot_delta_i_[3] = msg->velocity[joint_index_["BR_steering"]];
+      dot_delta_i_[1] = msg->velocity[joint_index_["BL_steering"]];
+      dot_delta_i_[2] = msg->velocity[joint_index_["BR_steering"]];
+      dot_delta_i_[3] = msg->velocity[joint_index_["FR_steering"]];
     }
 
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
