@@ -7,7 +7,9 @@
 #include "geometry_msgs/msg/quaternion.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Matrix3x3.h"
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 class ModelBasedControllerVelocity : public rclcpp::Node
 {
@@ -31,6 +33,9 @@ public:
         // pub
         velocity_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
             "/forward_velocity_controller/commands", 10);
+
+        tracking_error_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+          "/wcr/tracking_error", 10);
 
         // parameters
         this->declare_parameter("x_w_1", 0.1125);
@@ -60,12 +65,31 @@ public:
 private:
     void desired_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
     {
+        if(last_time_traj_ < 0){
+          rclcpp::Time temp_time = msg->header.stamp;
+          last_time_traj_ = temp_time.seconds();
+          return;
+        }
+        rclcpp::Time temp_current_time = msg->header.stamp;
+        double dt = temp_current_time.seconds() - last_time_traj_;
+        last_time_traj_ = temp_current_time.seconds();
+
         double roll_d, pitch_d, yaw_d;
         quaternionToEuler(msg->pose.pose.orientation, roll_d, pitch_d, yaw_d);
         double x_d = msg->pose.pose.position.x;
         double y_d = msg->pose.pose.position.y;
         double theta_d = yaw_d;
 
+        geometry_msgs::msg::PoseStamped tracking_error_msg;
+        tracking_error_msg.header.stamp = temp_current_time;
+        tracking_error_msg.pose.position.x = x_d - x_;
+        tracking_error_msg.pose.position.y = y_d - y_;
+
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, theta_d - theta_);
+        q.normalize();
+        tracking_error_msg.pose.orientation = tf2::toMsg(q);
+        
         //velocities are recived transformed in robot base_link frame
         double v_x_d = msg->twist.twist.linear.x;
         double v_y_d = msg->twist.twist.linear.y;
@@ -87,6 +111,7 @@ private:
         double a[4], b[4], omega_c_i[4], delta_c_i[4], dot_delta_c_i[4];
         double max_angular_speed = (210*0.229) * ((2.0*M_PI)/60.0);
         double maxQuotien = 0.0;
+        double sendingSteeringVelocity[4];
         //RCLCPP_INFO(this->get_logger(), "Error X: %f", e_x);
         //RCLCPP_INFO(this->get_logger(), "Error Y: %f", e_y);
         //RCLCPP_INFO(this->get_logger(), "Correction X: %f", e_x*Kp_x_);
@@ -111,7 +136,16 @@ private:
           double quotien=std::abs(omega_c_i[i]/max_angular_speed);
           if (quotien >= maxQuotien)
             maxQuotien = quotien;
-          //dot_delta_c_i[i] = dot_delta_i_[i] - Kp_delta_*(delta_c_i[i] - delta_i_[i]);
+
+          double returnValueTemp[2];
+          optimiseSpeedAngle(returnValueTemp, omega_c_i[i], delta_c_i[i]);
+          omega_c_i[i] = returnValueTemp[0];
+          delta_c_i[i] = returnValueTemp[1];
+
+          dot_delta_c_i[i] = (delta_c_i[i] - last_delta_c_i_[i])/dt;
+          last_delta_c_i_[i] = delta_c_i[i];
+
+          sendingSteeringVelocity[i] = dot_delta_c_i[i] + Kp_delta_*(delta_c_i[i] - delta_i_[i]);
         }
 
         if (maxQuotien > 1.0){
@@ -119,22 +153,16 @@ private:
             omega_c_i[i] /= maxQuotien;
           }
         }
-
-        double sendingValuesTemp[8] = {0, 0, 0, 0, 0, 0, 0, 0};
         std_msgs::msg::Float64MultiArray velocity_msg;
-        double returnValueTemp[2];
-        for(int i =0;i<4;i++){
-          optimiseSpeedAngle(returnValueTemp, omega_c_i[i], delta_c_i[i]);
-          sendingValuesTemp[i] = returnValueTemp[0];
-          dot_delta_c_i[i] = dot_delta_i_[i] - Kp_delta_*(returnValueTemp[1] - delta_i_[i]);
-          sendingValuesTemp[i+4] = dot_delta_c_i[i];
-          
+        for (int i=0;i<4;i++){
+          velocity_msg.data.push_back(omega_c_i[i]);
         }
-        velocity_msg.data.resize(8);
-        velocity_msg.data.assign(sendingValuesTemp, sendingValuesTemp + 8);
-
+        for (int i=0;i<4;i++){
+          velocity_msg.data.push_back(sendingSteeringVelocity[i]);
+        }
 
         velocity_pub_->publish(velocity_msg);
+        tracking_error_pub_->publish(tracking_error_msg);
         
     }
 
@@ -211,12 +239,15 @@ private:
 
     // pub
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr velocity_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr tracking_error_pub_;
 
     // state variables
     double x_, y_, theta_;
     double v_x_, v_y_, omega_;
     double Kp_x_, Kp_y_, Kp_th_, Kp_delta_;
     double delta_i_[4], dot_delta_i_[4];
+    double last_delta_c_i_[4] = {0.0, 0.0, 0.0, 0.0};
+    double last_time_traj_ = -1.0;
 
     std::unordered_map<std::string, size_t> joint_index_;
     
