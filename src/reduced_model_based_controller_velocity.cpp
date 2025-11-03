@@ -49,14 +49,6 @@ public:
         this->declare_parameter("y_w_2", 0.1125);
         this->declare_parameter("r_w_2", 0.0254);
 
-        this->declare_parameter("x_w_3", -0.1125);
-        this->declare_parameter("y_w_3", -0.1125);
-        this->declare_parameter("r_w_3", 0.0254);
-
-        this->declare_parameter("x_w_4", 0.1125);
-        this->declare_parameter("y_w_4", -0.1125);
-        this->declare_parameter("r_w_4", 0.0254);
-
         this->declare_parameter("Kp_x", 5.0);
         this->declare_parameter("Kp_y", 5.0);
         this->declare_parameter("Kp_th", 3.0);
@@ -102,9 +94,9 @@ private:
         double e_x = (x_d - x_) * cos(theta_) + (y_d - y_) * sin(theta_);
         double e_y = -(x_d - x_) * sin(theta_) + (y_d - y_) * cos(theta_);
         double e_th = angleError(theta_d, theta_);
-        double x_w[4] = {this->get_parameter("x_w_1").as_double(), this->get_parameter("x_w_2").as_double(), this->get_parameter("x_w_3").as_double(), this->get_parameter("x_w_4").as_double()};
-        double y_w[4] = {this->get_parameter("y_w_1").as_double(), this->get_parameter("y_w_2").as_double(), this->get_parameter("y_w_3").as_double(), this->get_parameter("y_w_4").as_double()};
-        double r_w[4] = {this->get_parameter("r_w_1").as_double(), this->get_parameter("r_w_2").as_double(), this->get_parameter("r_w_3").as_double(), this->get_parameter("r_w_4").as_double()};
+        double x_w[2] = {this->get_parameter("x_w_1").as_double(), this->get_parameter("x_w_2").as_double()};
+        double y_w[2] = {this->get_parameter("y_w_1").as_double(), this->get_parameter("y_w_2").as_double()};
+        double r_w[2] = {this->get_parameter("r_w_1").as_double(), this->get_parameter("r_w_2").as_double()};
         Kp_x_ = this->get_parameter("Kp_x").as_double();
         Kp_y_ = this->get_parameter("Kp_y").as_double();
         Kp_th_ = this->get_parameter("Kp_th").as_double();
