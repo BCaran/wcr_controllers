@@ -36,7 +36,7 @@ class TrajectoryPublisher : public rclcpp::Node
 
         if (trajectory_type_ == "circle")
         {
-            double r = 1.0;
+            double r = 0.25;
             double v = (2 * M_PI)/80;
 
             x_d     = r * sin(v * t);

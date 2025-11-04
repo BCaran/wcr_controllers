@@ -1,5 +1,9 @@
 #include <cmath>
 #include <unordered_map>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <string>
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -10,6 +14,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+
+using namespace std::chrono_literals;
 
 class ReducedModelBasedControllerVelocity : public rclcpp::Node
 {
@@ -40,6 +46,10 @@ public:
         delta_c_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
             "/wcr/delta_c", 10);
 
+        //timeout timer
+        trajectory_timeout_timer_ = this->create_wall_timer(100ms, std::bind(&ReducedModelBasedControllerVelocity::checkTrajectoryTimeout, this));
+        //trajectory_timeout_timer_ = this->create_wall_timer(100ms, std::bind(&ReducedModelBasedControllerVelocity::checkTrajectoryTimeout, this));
+
         // parameters
         this->declare_parameter("x_w_1", 0.1125);
         this->declare_parameter("y_w_1", 0.1125);
@@ -52,12 +62,39 @@ public:
         this->declare_parameter("Kp_x", 5.0);
         this->declare_parameter("Kp_y", 5.0);
         this->declare_parameter("Kp_th", 3.0);
-        this->declare_parameter("Kp_delta", 5.0);
+        this->declare_parameter("Kp_delta", 2.0);
 
         RCLCPP_INFO(this->get_logger(), "ReducedModelBasedControllerVelocity node started");
     }
 
 private:
+    void checkTrajectoryTimeout()
+      {
+        if (recived_first_trajectory_data_ == false)
+          return;
+        // Compare trajectory to previous values
+        bool changed = (x_d_ != last_x_d_) || (y_d_ != last_y_d_) || (theta_d_ != last_theta_d_);
+
+        if (changed)
+        {
+          last_x_d_ = x_d_;
+          last_y_d_ = y_d_;
+          last_theta_d_ = theta_d_;
+          last_trajectory_update_time_ = this->now();
+        }
+        else
+        {
+          auto elapsed = (this->now() - last_trajectory_update_time_).seconds();
+          if (elapsed > 0.2)
+          {
+            //RCLCPP_WARN(this->get_logger(), "Trajectory has not changed for %.2f seconds!", elapsed);
+            std_msgs::msg::Float64MultiArray velocity_msg;
+            velocity_msg.data = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            velocity_pub_->publish(velocity_msg);
+
+          }
+        }
+      }
     void desired_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
     {
         if(last_time_traj_ < 0){
@@ -65,23 +102,24 @@ private:
           last_time_traj_ = temp_time.seconds();
           return;
         }
+        recived_first_trajectory_data_ = true;
         rclcpp::Time temp_current_time = msg->header.stamp;
         double dt = temp_current_time.seconds() - last_time_traj_;
         last_time_traj_ = temp_current_time.seconds();
 
         double roll_d, pitch_d, yaw_d;
         quaternionToEuler(msg->pose.pose.orientation, roll_d, pitch_d, yaw_d);
-        double x_d = msg->pose.pose.position.x;
-        double y_d = msg->pose.pose.position.y;
-        double theta_d = unwrapAngle(yaw_d, theta_prev_, theta_offset_);
+        x_d_ = msg->pose.pose.position.x;
+        y_d_ = msg->pose.pose.position.y;
+        theta_d_ = unwrapAngle(yaw_d, theta_prev_, theta_offset_);
 
         geometry_msgs::msg::PoseStamped tracking_error_msg;
         tracking_error_msg.header.stamp = temp_current_time;
-        tracking_error_msg.pose.position.x = x_d - x_;
-        tracking_error_msg.pose.position.y = y_d - y_;
+        tracking_error_msg.pose.position.x = abs(x_d_ - x_);
+        tracking_error_msg.pose.position.y = abs(y_d_ - y_);
 
         tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, theta_d - theta_);
+        q.setRPY(0.0, 0.0, theta_d_ - theta_);
         q.normalize();
         tracking_error_msg.pose.orientation = tf2::toMsg(q);
         
@@ -91,9 +129,9 @@ private:
         double omega_d = msg->twist.twist.angular.z;
 
         //Error transformed in robot frame
-        double e_x = (x_d - x_) * cos(theta_) + (y_d - y_) * sin(theta_);
-        double e_y = -(x_d - x_) * sin(theta_) + (y_d - y_) * cos(theta_);
-        double e_th = angleError(theta_d, theta_);
+        double e_x = (x_d_ - x_) * cos(theta_) + (y_d_ - y_) * sin(theta_);
+        double e_y = -(x_d_ - x_) * sin(theta_) + (y_d_ - y_) * cos(theta_);
+        double e_th = angleError(theta_d_, theta_);
         double x_w[2] = {this->get_parameter("x_w_1").as_double(), this->get_parameter("x_w_2").as_double()};
         double y_w[2] = {this->get_parameter("y_w_1").as_double(), this->get_parameter("y_w_2").as_double()};
         double r_w[2] = {this->get_parameter("r_w_1").as_double(), this->get_parameter("r_w_2").as_double()};
@@ -107,11 +145,6 @@ private:
         double max_angular_speed = (210*0.229) * ((2.0*M_PI)/60.0);
         double maxQuotien = 0.0;
         double sendingSteeringVelocity[4];
-        //RCLCPP_INFO(this->get_logger(), "Error X: %f", e_x);
-        //RCLCPP_INFO(this->get_logger(), "Error Y: %f", e_y);
-        //RCLCPP_INFO(this->get_logger(), "Correction X: %f", e_x*Kp_x_);
-        //RCLCPP_INFO(this->get_logger(), "Correciton Y: %f", e_y*Kp_x_);
-
 
         for(int i=0;i<2;i++){
           //transform trajectory from cartesian space to robot joint space
@@ -256,6 +289,8 @@ private:
       }
     }
 
+    
+
     // sub
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr desired_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -266,6 +301,10 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr tracking_error_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr delta_c_pub_;
 
+    rclcpp::TimerBase::SharedPtr trajectory_timeout_timer_;
+    
+
+
     // state variables
     double x_, y_, theta_;
     double v_x_, v_y_, omega_;
@@ -275,6 +314,12 @@ private:
     double last_time_traj_ = -1.0;
     double theta_prev_ = 0.0;
     double theta_offset_ = 0.0;
+
+    double x_d_, y_d_, theta_d_;
+    double last_x_d_, last_y_d_, last_theta_d_;
+    rclcpp::Time last_trajectory_update_time_;
+
+    bool recived_first_trajectory_data_ = false;
 
     std::unordered_map<std::string, size_t> joint_index_;
     
