@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <Eigen/Dense>
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -16,6 +17,9 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
 using namespace std::chrono_literals;
+using Eigen::Matrix3d;
+using Eigen::Vector3d;
+
 
 class ReducedModelBasedControllerVelocity : public rclcpp::Node
 {
@@ -37,8 +41,8 @@ public:
             std::bind(&ReducedModelBasedControllerVelocity::joint_states_callback, this, std::placeholders::_1));
 
         // pub
-        velocity_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
-            "/forward_velocity_controller/commands", 10);
+        torque_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/forward_effort_controller/commands", 10);
 
         tracking_error_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
           "/wcr/tracking_error", 10);
@@ -88,9 +92,10 @@ private:
           if (elapsed > 0.2)
           {
             //RCLCPP_WARN(this->get_logger(), "Trajectory has not changed for %.2f seconds!", elapsed);
-            std_msgs::msg::Float64MultiArray velocity_msg;
-            velocity_msg.data = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-            velocity_pub_->publish(velocity_msg);
+            std_msgs::msg::Float64MultiArray torque_msg;
+            RCLCPP_WARN(this->get_logger(), "Motors stopped");
+            torque_msg.data = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            torque_pub_->publish(torque_msg);
 
           }
         }
@@ -182,15 +187,6 @@ private:
             omega_c_i[i] /= maxQuotien;
           }
         }
-        std_msgs::msg::Float64MultiArray velocity_msg;
-        velocity_msg.data.push_back(omega_c_i[0]);
-        velocity_msg.data.push_back(omega_c_i[1]);
-        velocity_msg.data.push_back(omega_c_i[1]);
-        velocity_msg.data.push_back(omega_c_i[0]);
-        velocity_msg.data.push_back(sendingSteeringVelocity[0]);
-        velocity_msg.data.push_back(sendingSteeringVelocity[1]);
-        velocity_msg.data.push_back(sendingSteeringVelocity[1]);
-        velocity_msg.data.push_back(sendingSteeringVelocity[0]);
 
         std_msgs::msg::Float64MultiArray delta_c_msg;
         delta_c_msg.data.push_back(delta_c_i[0]);
@@ -198,10 +194,112 @@ private:
         delta_c_msg.data.push_back(delta_c_i[1]);
         delta_c_msg.data.push_back(delta_c_i[0]);
 
-        velocity_pub_->publish(velocity_msg);
+        std_msgs::msg::Float64MultiArray torque_msg;
+
+        //Preparing vectors for torque controller
+        v_d_(0) = omega_c_i[0] * r_w[0];
+        v_d_(1) = dot_delta_c_i[0];
+        v_d_(2) = dot_delta_c_i[1];
+
+        dotv_d_(0) = ((last_omega_c_ - omega_c_i[0]) * r_w[0]) / dt;
+        dotv_d_(1) = dot_delta_c_i[0] / dt;
+        dotv_d_(2) = dot_delta_c_i[1] / dt;
+
+        last_omega_c_ = omega_c_i[0];
+
+        double delta_f = delta_i_[0];
+        double delta_r = delta_i_[1];
+        double omega_f = dot_delta_i_[0];
+        double omega_r = dot_delta_c_i[1];
+
+        Vector3d tau = calculateTorques(delta_f, delta_r, omega_f, omega_r, v_, dotv_, v_d_, dotv_d_);
+
+        std_msgs::msg::Float64MultiArray command_torque_msg;
+        command_torque_msg.data = {tau(0), tau(0), tau(0), tau(0), tau(1), tau(2), tau(2), tau(1)};
+
+        torque_pub_->publish(command_torque_msg);
         tracking_error_pub_->publish(tracking_error_msg);
         delta_c_pub_->publish(delta_c_msg);
         
+    }
+    Vector3d calculateTorques(
+    double delta_f, double delta_r, double omega_f, double omega_r,
+    const Vector3d& v, const Vector3d& dotv, const Vector3d& v_d, 
+    const Vector3d& dotv_d)
+    {
+        // Robot parameters
+        double r = 0.0254;
+        double a = 0.1125;
+        double b = 0.1125;
+        double m = (3950.0 + 1240.0) * 1e-3;
+        double m_w = 0.03203;
+        double I_theta = m * ((2*a)*(2*a) + (2*b)*(2*b)) / 12.0;
+        double I_w = 0.5 * m_w * r * r;
+        double I_delta = 0.002;
+
+        double I_b = I_theta + 4*m_w*(a*a + b*b);
+        double S = a*a + b*b;
+        double D = 4*S;
+
+        // Precompute cos/sin
+        double c1 = cos(delta_f), s1 = sin(delta_f);
+        double c2 = cos(delta_r), s2 = sin(delta_r);
+
+        // Wi
+        double W1 = (-b*c1 + a*s1) / D;
+        double W2 = (-b*c2 - a*s2) / D;
+        double W3 = ( b*c2 - a*s2) / D;
+        double W4 = ( b*c1 + a*s1) / D;
+
+        double sumW = W1 + W2 + W3 + W4;
+        double sumc = 2*(c1 + c2);
+        double sums = 2*(s1 + s2);
+
+        // Mass matrix M
+        double M11 = I_b*sumW*sumW + (m/16.0)*(sumc*sumc + sums*sums) + 4*I_w/(r*r);
+        Matrix3d M = Matrix3d::Zero();
+        M(0,0) = M11;
+        M(1,1) = 2*I_delta;
+        M(2,2) = 2*I_delta;
+
+        // Derivatives of Wi, ci, si
+        double dotW1 = ( b*sin(delta_f) + a*cos(delta_f)) * omega_f / D;
+        double dotW2 = ( b*sin(delta_r) - a*cos(delta_r)) * omega_r / D;
+        double dotW3 = (-b*sin(delta_r) - a*cos(delta_r)) * omega_r / D;
+        double dotW4 = (-b*sin(delta_f) + a*cos(delta_f)) * omega_f / D;
+
+        double dotsumW = dotW1 + dotW2 + dotW3 + dotW4;
+        double dotsumc = 2*(-s1*omega_f - s2*omega_r);
+        double dotsums = 2*( c1*omega_f + c2*omega_r);
+
+        // V matrix
+        double V11 = I_b*(sumW*dotsumW) + (m/16.0)*(sumc*dotsumc + sums*dotsums);
+        Matrix3d V = Matrix3d::Zero();
+        V(0,0) = V11;
+
+        // N matrix
+        double sumxy = 2*a*(s1 - s2);
+        double N11 = (1/r)*(sumW*sumxy + 0.25*(sumc*sumc + sums*sums) + 4);
+        Matrix3d N = Matrix3d::Zero();
+        N(0,0) = N11;
+        N(1,1) = 2;
+        N(2,2) = 2;
+
+        // PD gains
+        Matrix3d Kp = Matrix3d::Zero();
+        Kp(0,0) = 500; Kp(1,1) = 95; Kp(2,2) = 95;
+        Matrix3d Kd = Matrix3d::Zero();
+        Kd(0,0) = 5; Kd(1,1) = 5.5; Kd(2,2) = 5.5;
+
+        // Dynamics with PD+FF
+        //Vector3d dotv = (M + N*Kd).ldlt().solve(
+        //    M*dotv_d + V*(v_d - v) - N*Kp*(v - v_d) + N*Kd*dotv_d
+        //);
+
+        Vector3d tau = -Kp*(v - v_d) - Kd*(dotv - dotv_d) +
+                      N.ldlt().solve(M*dotv_d + V*v_d);
+
+        return tau;
     }
 
     double saturate(double value, double min_val, double max_val) {
@@ -228,7 +326,14 @@ private:
           for (size_t i = 0; i < msg->name.size(); ++i) {
               joint_index_[msg->name[i]] = i;
           }
+          last_js_msg_ = msg;
+          return;
       }
+      // compute dt
+      rclcpp::Time current_time = msg->header.stamp;
+      rclcpp::Time last_time = last_js_msg_->header.stamp;
+      double dt = (current_time - last_time).seconds();
+
       delta_i_[0] = msg->position[joint_index_["FL_steering"]];
       delta_i_[1] = msg->position[joint_index_["BL_steering"]];
       delta_i_[2] = msg->position[joint_index_["BR_steering"]];
@@ -238,6 +343,18 @@ private:
       dot_delta_i_[1] = msg->velocity[joint_index_["BL_steering"]];
       dot_delta_i_[2] = msg->velocity[joint_index_["BR_steering"]];
       dot_delta_i_[3] = msg->velocity[joint_index_["FR_steering"]];
+
+      v_(0) = msg->velocity[joint_index_["FL_wheel"]] * this->get_parameter("r_w_1").as_double(); //pomozni s r
+      v_(1) = msg->velocity[joint_index_["FL_steering"]];
+      v_(2) = msg->velocity[joint_index_["FR_steering"]];
+
+      dotv_(0) = ((msg->velocity[joint_index_["FL_wheel"]] - last_js_msg_->velocity[joint_index_["FL_wheel"]]) * this->get_parameter("r_w_1").as_double()) / dt;
+      dotv_(1) = (msg->velocity[joint_index_["FL_steering"]] - last_js_msg_->velocity[joint_index_["FL_steering"]]) / dt;
+      dotv_(2) = (msg->velocity[joint_index_["FR_steering"]] - last_js_msg_->velocity[joint_index_["FR_steering"]]) / dt;
+
+      last_js_msg_ = msg;
+
+
     }
 
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -297,12 +414,24 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
 
     // pub
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr velocity_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr tracking_error_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr delta_c_pub_;
 
     rclcpp::TimerBase::SharedPtr trajectory_timeout_timer_;
+
+    //dynamics controller
+    Eigen::Vector3d v_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d dotv_ = Eigen::Vector3d::Zero();
+
+    Eigen::Vector3d v_d_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d dotv_d_ = Eigen::Vector3d::Zero();
+
+    sensor_msgs::msg::JointState::SharedPtr last_js_msg_;
     
+    double last_omega_c_ = 0.0;
+    double last_delta_f_c_ = 0.0;
+    double last_delta_r_c_ = 0.0;
 
 
     // state variables

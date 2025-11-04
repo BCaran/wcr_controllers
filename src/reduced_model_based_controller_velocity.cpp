@@ -43,8 +43,8 @@ public:
         tracking_error_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
           "/wcr/tracking_error", 10);
 
-        delta_c_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
-            "/wcr/delta_c", 10);
+        steering_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/forward_position_controller/commands", 10);
 
         //timeout timer
         trajectory_timeout_timer_ = this->create_wall_timer(100ms, std::bind(&ReducedModelBasedControllerVelocity::checkTrajectoryTimeout, this));
@@ -200,7 +200,7 @@ private:
 
         velocity_pub_->publish(velocity_msg);
         tracking_error_pub_->publish(tracking_error_msg);
-        delta_c_pub_->publish(delta_c_msg);
+        steering_pub_->publish(delta_c_msg);
         
     }
 
@@ -299,7 +299,7 @@ private:
     // pub
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr velocity_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr tracking_error_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr delta_c_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr steering_pub_;
 
     rclcpp::TimerBase::SharedPtr trajectory_timeout_timer_;
     
