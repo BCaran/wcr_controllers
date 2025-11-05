@@ -40,6 +40,9 @@ ament_target_dependencies(reduced_model_based_controller_velocity rclcpp std_msg
 add_executable(torque_controller src/torque_model_based_controller.cpp)
 ament_target_dependencies(torque_controller rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs sensor_msgs)
 
+add_executable(mimic_help_controller src/mimic_help_controller.cpp)
+ament_target_dependencies(mimic_help_controller rclcpp std_msgs geometry_msgs std_srvs tf2 tf2_geometry_msgs nav_msgs sensor_msgs)
+
 install(TARGETS
   inv_kin_controller
   trajectory_generator
@@ -47,6 +50,7 @@ install(TARGETS
   model_based_controller_velocity
   reduced_model_based_controller_velocity
   torque_controller
+  mimic_help_controller
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

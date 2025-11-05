@@ -292,12 +292,9 @@ private:
         Kd(0,0) = 5; Kd(1,1) = 5.5; Kd(2,2) = 5.5;
 
         // Dynamics with PD+FF
-        //Vector3d dotv = (M + N*Kd).ldlt().solve(
-        //    M*dotv_d + V*(v_d - v) - N*Kp*(v - v_d) + N*Kd*dotv_d
-        //);
+        //Eigen::VectorXd tau = -Kp * (v - v_d) - Kd * (dotv - dotv_d);
 
-        Vector3d tau = -Kp*(v - v_d) - Kd*(dotv - dotv_d) +
-                      N.ldlt().solve(M*dotv_d + V*v_d);
+        Vector3d tau = -Kp*(v - v_d) - Kd*(dotv - dotv_d) + N.colPivHouseholderQr().solve(M * dotv_d + V * v_d);
 
         return tau;
     }
