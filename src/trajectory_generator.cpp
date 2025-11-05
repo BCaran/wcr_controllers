@@ -69,6 +69,22 @@ class TrajectoryPublisher : public rclcpp::Node
               (v_x_d * v_x_d + v_y_d * v_y_d + 1e-9); // +epsilon to avoid div by 0
         }
 
+        else if (trajectory_type_ == "line")
+        {
+          x_d = 0.05 * t;
+          y_d = 0.0;
+
+          v_x_d = 0.05;
+          v_y_d = 0.0;
+
+          theta_d = atan2(v_y_d, v_x_d);
+          double v_x_dot = 0.0;
+          double v_y_dot = 0.0;
+          omega_d = (v_x_d * v_y_dot - v_y_d * v_x_dot) /
+              (v_x_d * v_x_d + v_y_d * v_y_d + 1e-9); // +epsilon to avoid div by 0 
+        
+        }
+
         nav_msgs::msg::Odometry msg;
         msg.header.stamp = this->now();
         msg.header.frame_id = "odom";
