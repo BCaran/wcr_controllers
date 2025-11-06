@@ -25,7 +25,7 @@ class ReducedModelBasedControllerVelocity : public rclcpp::Node
 {
 public:
     ReducedModelBasedControllerVelocity()
-    : Node("trajectory_follower")
+    : Node("torque_controller")
     {
         // sub
         desired_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
@@ -63,10 +63,22 @@ public:
         this->declare_parameter("y_w_2", 0.1125);
         this->declare_parameter("r_w_2", 0.0254);
 
-        this->declare_parameter("Kp_x", 5.0);
-        this->declare_parameter("Kp_y", 5.0);
-        this->declare_parameter("Kp_th", 3.0);
-        this->declare_parameter("Kp_delta", 2.0);
+        this->declare_parameter("Kp_x", 1.0);
+        this->declare_parameter("Kp_y", 1.0);
+        this->declare_parameter("Kp_th", 1.0);
+        this->declare_parameter("Kp_delta", 1.0);
+
+        this->declare_parameter("m", 5190.0);
+        this->declare_parameter("m_w", 32.03);
+        this->declare_parameter("I_delta", 0.002);
+
+        this->declare_parameter("Kp_1", 2.0);
+        this->declare_parameter("Kp_2", 1.0);
+        this->declare_parameter("Kp_3", 1.0);
+
+        this->declare_parameter("Kd_1", 1.0);
+        this->declare_parameter("Kd_2", 1.0);
+        this->declare_parameter("Kd_3", 1.0);
 
         RCLCPP_INFO(this->get_logger(), "ReducedModelBasedControllerTorque node started");
     }
@@ -246,11 +258,11 @@ private:
         double r = 0.0254;
         double a = 0.1125;
         double b = 0.1125;
-        double m = (3950.0 + 1240.0) * 1e-3;
-        double m_w = 0.03203;
+        double m = this->get_parameter("m").as_double() * 1e-3;
+        double m_w = this->get_parameter("m_w").as_double() * 1e-3;
         double I_theta = m * ((2*a)*(2*a) + (2*b)*(2*b)) / 12.0;
         double I_w = 0.5 * m_w * r * r;
-        double I_delta = 0.002;
+        double I_delta = this->get_parameter("I_delta").as_double();
 
         double I_b = I_theta + 4*m_w*(a*a + b*b);
         double S = a*a + b*b;
@@ -302,9 +314,9 @@ private:
 
         // PD gains
         Matrix3d Kp = Matrix3d::Zero();
-        Kp(0,0) = 500; Kp(1,1) = 95; Kp(2,2) = 95;
         Matrix3d Kd = Matrix3d::Zero();
-        Kd(0,0) = 5; Kd(1,1) = 5.5; Kd(2,2) = 5.5;
+        Kp.diagonal() << this->get_parameter("Kp_1").as_double(), this->get_parameter("Kp_2").as_double(), this->get_parameter("Kp_3").as_double();
+        Kd.diagonal() << this->get_parameter("Kd_1").as_double(), this->get_parameter("Kd_2").as_double(), this->get_parameter("Kd_3").as_double();
 
         // Dynamics with PD+FF
         //Eigen::VectorXd tau = -Kp * (v - v_d) - Kd * (dotv - dotv_d);
