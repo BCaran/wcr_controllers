@@ -80,8 +80,7 @@ class TrajectoryPublisher : public rclcpp::Node
           theta_d = atan2(v_y_d, v_x_d);
           double v_x_dot = 0.0;
           double v_y_dot = 0.0;
-          omega_d = (v_x_d * v_y_dot - v_y_d * v_x_dot) /
-              (v_x_d * v_x_d + v_y_d * v_y_d + 1e-9); // +epsilon to avoid div by 0 
+          omega_d = 0.0;
         
         }
 
