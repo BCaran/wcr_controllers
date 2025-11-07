@@ -27,15 +27,7 @@ public:
     ReducedModelBasedControllerVelocity()
     : Node("simple_torque_controller")
     {
-        // sub
-        desired_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "wcr/desired_trajectory", 10,
-            std::bind(&ReducedModelBasedControllerVelocity::desired_callback, this, std::placeholders::_1));
-
-        odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "wcr/odom", 10,
-            std::bind(&ReducedModelBasedControllerVelocity::odom_callback, this, std::placeholders::_1));
-        
+        // sub       
         joint_states_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
             "joint_states", 10,
             std::bind(&ReducedModelBasedControllerVelocity::joint_states_callback, this, std::placeholders::_1));
@@ -47,32 +39,24 @@ public:
         steering_torque_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
             "/main_steering_controller/commands", 10);
 
-        tracking_error_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
-          "/wcr/tracking_error", 10);
+        desired_trajectory_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/desired_trajectory_v_dv", 10);
 
-        //timeout timer
-        trajectory_timeout_timer_ = this->create_wall_timer(100ms, std::bind(&ReducedModelBasedControllerVelocity::checkTrajectoryTimeout, this));
-        //trajectory_timeout_timer_ = this->create_wall_timer(100ms, std::bind(&ReducedModelBasedControllerVelocity::checkTrajectoryTimeout, this));
+        output_trajectory_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/output_trajectory_v_dv", 10);
 
-        // parameters
-        this->declare_parameter("x_w_1", 0.1125);
-        this->declare_parameter("y_w_1", 0.1125);
-        this->declare_parameter("r_w_1", 0.0254);
+        tau_c_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/tau_command", 10);
 
-        this->declare_parameter("x_w_2", -0.1125);
-        this->declare_parameter("y_w_2", 0.1125);
-        this->declare_parameter("r_w_2", 0.0254);
-
-        this->declare_parameter("Kp_x", 1.0);
-        this->declare_parameter("Kp_y", 1.0);
-        this->declare_parameter("Kp_th", 1.0);
-        this->declare_parameter("Kp_delta", 1.0);
+        //timer
+        last_t_ = this->get_clock()->now().seconds();
+        simple_trajectory_timer_ = this->create_wall_timer(10ms, std::bind(&ReducedModelBasedControllerVelocity::simpleTrajectory, this));
 
         this->declare_parameter("m", 5190.0);
         this->declare_parameter("m_w", 32.03);
         this->declare_parameter("I_delta", 0.002);
 
-        this->declare_parameter("Kp_1", 2.0);
+        this->declare_parameter("Kp_1", 1.0);
         this->declare_parameter("Kp_2", 1.0);
         this->declare_parameter("Kp_3", 1.0);
 
@@ -80,175 +64,102 @@ public:
         this->declare_parameter("Kd_2", 1.0);
         this->declare_parameter("Kd_3", 1.0);
 
+        this->declare_parameter("Kp", 0.0);
+        this->declare_parameter("Ki", 0.0);
+        this->declare_parameter("Kd", 0.0);
+        this->declare_parameter("N", 100.0);
+
+        this->declare_parameter("v", 0.0);
+
         RCLCPP_INFO(this->get_logger(), "ReducedModelBasedControllerTorque node started");
     }
 
 private:
-    void checkTrajectoryTimeout()
+    void simpleTrajectory(){
+      //time
+      double current_t = this->get_clock()->now().seconds();
+      double dt =  current_t - last_t_;
+      t_ += dt;
+      last_t_ = current_t;
+
+      double end_time = 2*M_PI*20;
+
+      //velocity trajectory v
+      //if (t_ > end_time){
+      //  return;
+      //}
+      double v1_d =  this->get_parameter("v").as_double();//sin(t_/10)/20;//0.05 - cos(t_/20)/20;
+      double omega1_d = 0.0;//sin(t_/20)/400;
+      double omega2_d = 0.0;//-sin(t_/20)/400;
+
+      //acceleration trajectory dv/dt
+      double dotv1_d = 0.0;//cos(t_/10)/200;
+      double dotomega1_d = 0.0;//cos(t_/20)/8000;
+      double dotomega2_d = 0.0;//-cos(t_/20)/8000;
+
+      std_msgs::msg::Float64MultiArray input_d;
+      input_d.data = {v1_d, omega1_d, omega2_d, dotv1_d, dotomega1_d, dotomega2_d};
+
+      std_msgs::msg::Float64MultiArray output;
+      output.data = {v_(0), v_(1), v_(2), dotv_(0), dotv_(1), dotv_(2)};
+
+      double delta_f = delta_i_[0];
+      double delta_r = delta_i_[1];
+      double omega_f = dot_delta_i_[0];
+      double omega_r = dot_delta_i_[1];
+
+      Eigen::Vector3d v_d(v1_d, omega1_d, omega2_d);
+      Eigen::Vector3d dotv_d(dotv1_d, dotomega1_d, dotomega2_d);
+
+      //Vector3d tau = calculateTorques(delta_f, delta_r, omega_f, omega_r, v_, dotv_, v_d, dotv_d);
+      //tau(0) = saturate(tau(0), -0.2, 0.2);
+      //tau(1) = 0.0;//saturate(tau(1), -0.2, 0.2);
+      //tau(2) = 0.0;//saturate(tau(2), -0.2, 0.2);
+
+      double tau = PIController(v_d(0), v_(0), dt, 1.9, -1.9);
+
+      std_msgs::msg::Float64MultiArray driving_torque_msg;
+      std_msgs::msg::Float64MultiArray steering_torque_msg;
+
+      driving_torque_msg.data = {tau};
+      steering_torque_msg.data = {0.0, 0.0};
+
+      driving_torque_pub_->publish(driving_torque_msg);
+      steering_torque_pub_->publish(steering_torque_msg);
+      desired_trajectory_pub_ ->publish(input_d);
+      output_trajectory_pub_ ->publish(output);   
+    }
+
+    double PIController(double refrence, double measurment, double dt, double u_max, double u_min)
+    {
+      double Kp = this->get_parameter("Kp").as_double();
+      double Ki = this->get_parameter("Ki").as_double();
+      double Kd = this->get_parameter("Kd").as_double();
+      double N = this->get_parameter("N").as_double();
+
+      double e = refrence - measurment;
+
+      double u_p = Kp * e;
+      integrator_term_ += Ki * e * dt;
+      double d_meas = N * (measurment - d_filt_);
+      d_filt_ += N * dt * (measurment - d_filt_);
+      double u_d = -Kd * d_meas;
+
+      double u = u_p + integrator_term_ + u_d;
+      if (u > u_max)
       {
-        if (recived_first_trajectory_data_ == false)
-          return;
-        // Compare trajectory to previous values
-        bool changed = (x_d_ != last_x_d_) || (y_d_ != last_y_d_) || (theta_d_ != last_theta_d_);
-
-        if (changed)
-        {
-          last_x_d_ = x_d_;
-          last_y_d_ = y_d_;
-          last_theta_d_ = theta_d_;
-          last_trajectory_update_time_ = this->now();
-        }
-        else
-        {
-          auto elapsed = (this->now() - last_trajectory_update_time_).seconds();
-          if (elapsed > 0.2)
-          {
-            //RCLCPP_WARN(this->get_logger(), "Trajectory has not changed for %.2f seconds!", elapsed);
-            std_msgs::msg::Float64MultiArray driving_torque_msg;
-            std_msgs::msg::Float64MultiArray steering_torque_msg;
-            RCLCPP_WARN(this->get_logger(), "Motors stopped");
-            driving_torque_msg.data = {0.0};
-            steering_torque_msg.data = {0.0, 0.0};
-            driving_torque_pub_->publish(driving_torque_msg);
-            steering_torque_pub_->publish(steering_torque_msg);
-          }
-        }
+          u = u_max;
+          if (e > 0) integrator_term_ -= Ki * e * dt; // prevent windup
       }
-    void desired_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
-    {
-        if(last_time_traj_ < 0){
-          rclcpp::Time temp_time = msg->header.stamp;
-          last_time_traj_ = temp_time.seconds();
-          return;
-        }
-        recived_first_trajectory_data_ = true;
-        rclcpp::Time temp_current_time = msg->header.stamp;
-        double dt = temp_current_time.seconds() - last_time_traj_;
-        last_time_traj_ = temp_current_time.seconds();
+      else if (u < u_min)
+      {
+          u = u_min;
+          if (e < 0) integrator_term_ -= Ki * e * dt; // prevent windup
+      }
 
-        double roll_d, pitch_d, yaw_d;
-        quaternionToEuler(msg->pose.pose.orientation, roll_d, pitch_d, yaw_d);
-        x_d_ = msg->pose.pose.position.x;
-        y_d_ = msg->pose.pose.position.y;
-        theta_d_ = unwrapAngle(yaw_d, theta_prev_, theta_offset_);
-
-        geometry_msgs::msg::PoseStamped tracking_error_msg;
-        tracking_error_msg.header.stamp = temp_current_time;
-        tracking_error_msg.pose.position.x = abs(x_d_ - x_);
-        tracking_error_msg.pose.position.y = abs(y_d_ - y_);
-
-        tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, theta_d_ - theta_);
-        q.normalize();
-        tracking_error_msg.pose.orientation = tf2::toMsg(q);
-        
-        //velocities are recived transformed in robot base_link frame
-        double v_x_d = msg->twist.twist.linear.x;
-        double v_y_d = msg->twist.twist.linear.y;
-        double omega_d = msg->twist.twist.angular.z;
-
-        //Error transformed in robot frame
-        double e_x = (x_d_ - x_) * cos(theta_) + (y_d_ - y_) * sin(theta_);
-        double e_y = -(x_d_ - x_) * sin(theta_) + (y_d_ - y_) * cos(theta_);
-        double e_th = angleError(theta_d_, theta_);
-        double x_w[2] = {this->get_parameter("x_w_1").as_double(), this->get_parameter("x_w_2").as_double()};
-        double y_w[2] = {this->get_parameter("y_w_1").as_double(), this->get_parameter("y_w_2").as_double()};
-        double r_w[2] = {this->get_parameter("r_w_1").as_double(), this->get_parameter("r_w_2").as_double()};
-        Kp_x_ = this->get_parameter("Kp_x").as_double();
-        Kp_y_ = this->get_parameter("Kp_y").as_double();
-        Kp_th_ = this->get_parameter("Kp_th").as_double();
-        Kp_delta_ = this->get_parameter("Kp_delta").as_double();
-
-        double v_x_i[4], v_y_i[4], v_d_i[4], delta_d_i[4];
-        double a[4], b[4], omega_c_i[4], delta_c_i[4], dot_delta_c_i[4];
-        double max_angular_speed = (210*0.229) * ((2.0*M_PI)/60.0);
-        double maxQuotien = 0.0;
-        //double sendingSteeringVelocity[4];
-
-        for(int i=0;i<2;i++){
-          //transform trajectory from cartesian space to robot joint space
-          v_x_i[i] = v_x_d - y_w[i] * omega_d;
-          v_y_i[i] = v_y_d + x_w[i] * omega_d;
-          v_d_i[i] = sqrt(v_x_i[i] * v_x_i[i] + v_y_i[i] * v_y_i[i]);
-          delta_d_i[i] = atan2(v_y_i[i], v_x_i[i]);
-          
-          a[i] = v_d_i[i] * cos(delta_d_i[i]) + Kp_x_ * e_x - Kp_th_ * y_w[i] * e_th;
-          b[i] = v_d_i[i] * sin(delta_d_i[i]) + Kp_y_ * e_y + Kp_th_ * x_w[i] * e_th;
-
-          //calculating steering angle and driving velocity
-          omega_c_i[i] = (sqrt(a[i] * a[i] + b[i] * b[i])) / r_w[i];
-          delta_c_i[i] = atan2(b[i], a[i]);
-
-          //checking if velocity is higher then maximum motor velocity
-          double quotien=std::abs(omega_c_i[i]/max_angular_speed);
-          if (quotien >= maxQuotien)
-            maxQuotien = quotien;
-
-          double returnValueTemp[2];
-          optimiseSpeedAngle(returnValueTemp, omega_c_i[i], delta_c_i[i]);
-          omega_c_i[i] = returnValueTemp[0];
-          delta_c_i[i] = returnValueTemp[1];
-
-          dot_delta_c_i[i] = (delta_c_i[i] - last_delta_c_i_[i])/dt;
-          last_delta_c_i_[i] = delta_c_i[i];
-
-          //sendingSteeringVelocity[i] = saturate(dot_delta_c_i[i] + Kp_delta_*(delta_c_i[i] - delta_i_[i]), -max_angular_speed, max_angular_speed);
-
-        }
-
-        if (maxQuotien > 1.0){
-          for(int i=0; i<2; i++){
-            omega_c_i[i] /= maxQuotien;
-          }
-        }
-
-        std_msgs::msg::Float64MultiArray delta_c_msg;
-        delta_c_msg.data.push_back(delta_c_i[0]);
-        delta_c_msg.data.push_back(delta_c_i[1]);
-        delta_c_msg.data.push_back(delta_c_i[1]);
-        delta_c_msg.data.push_back(delta_c_i[0]);
-
-        std_msgs::msg::Float64MultiArray torque_msg;
-
-        //Preparing vectors for torque controller
-        v_d_(0) = omega_c_i[0] * r_w[0];
-        v_d_(1) = dot_delta_c_i[0];
-        v_d_(2) = dot_delta_c_i[1];
-
-        dotv_d_(0) = ((last_omega_c_ - omega_c_i[0]) * r_w[0]) / dt;
-        dotv_d_(1) = dot_delta_c_i[0] / dt;
-        dotv_d_(2) = dot_delta_c_i[1] / dt;
-
-        last_omega_c_ = omega_c_i[0];
-
-        double delta_f = delta_i_[0];
-        double delta_r = delta_i_[1];
-        double omega_f = dot_delta_i_[0];
-        double omega_r = dot_delta_c_i[1];
-
-        Vector3d tau = calculateTorques(delta_f, delta_r, omega_f, omega_r, v_, dotv_, v_d_, dotv_d_);
-        tau(0) = saturateTorque(tau(0), 0.2);
-        tau(1) = saturateTorque(tau(1), 0.2);
-        tau(2) = saturateTorque(tau(2), 0.2);
-
-        std_msgs::msg::Float64MultiArray driving_torque_msg;
-        std_msgs::msg::Float64MultiArray steering_torque_msg;
-
-        driving_torque_msg.data = {tau(0)};
-        steering_torque_msg.data = {tau(1), tau(2)};
-
-        tracking_error_pub_->publish(tracking_error_msg);
-        driving_torque_pub_->publish(driving_torque_msg);
-        steering_torque_pub_->publish(steering_torque_msg);
-        
+      return u;
     }
 
-    double saturateTorque(double value, double limit)
-    {
-        if (value > limit)  return limit;
-        if (value < -limit) return -limit;
-        return value;
-    }
     Vector3d calculateTorques(
     double delta_f, double delta_r, double omega_f, double omega_r,
     const Vector3d& v, const Vector3d& dotv, const Vector3d& v_d, 
@@ -318,9 +229,6 @@ private:
         Kp.diagonal() << this->get_parameter("Kp_1").as_double(), this->get_parameter("Kp_2").as_double(), this->get_parameter("Kp_3").as_double();
         Kd.diagonal() << this->get_parameter("Kd_1").as_double(), this->get_parameter("Kd_2").as_double(), this->get_parameter("Kd_3").as_double();
 
-        // Dynamics with PD+FF
-        //Eigen::VectorXd tau = -Kp * (v - v_d) - Kd * (dotv - dotv_d);
-
         Vector3d tau = -Kp*(v - v_d) - Kd*(dotv - dotv_d) + N.colPivHouseholderQr().solve(M * dotv_d + V * v_d);
         tau(0) /= 4;
         tau(1) /= 2;
@@ -370,11 +278,11 @@ private:
       dot_delta_i_[2] = msg->velocity[joint_index_["BR_steering"]];
       dot_delta_i_[3] = msg->velocity[joint_index_["FR_steering"]];
 
-      v_(0) = msg->velocity[joint_index_["FL_wheel"]] * this->get_parameter("r_w_1").as_double(); //pomozni s r
+      v_(0) = msg->velocity[joint_index_["FL_wheel"]] * 0.0254; //pomozni s r
       v_(1) = msg->velocity[joint_index_["FL_steering"]];
       v_(2) = msg->velocity[joint_index_["BL_steering"]];
 
-      dotv_(0) = ((msg->velocity[joint_index_["FL_wheel"]] - last_js_msg_->velocity[joint_index_["FL_wheel"]]) * this->get_parameter("r_w_1").as_double()) / dt;
+      dotv_(0) = ((msg->velocity[joint_index_["FL_wheel"]] - last_js_msg_->velocity[joint_index_["FL_wheel"]]) * 0.0254) / dt;
       dotv_(1) = (msg->velocity[joint_index_["FL_steering"]] - last_js_msg_->velocity[joint_index_["FL_steering"]]) / dt;
       dotv_(2) = (msg->velocity[joint_index_["BL_steering"]] - last_js_msg_->velocity[joint_index_["BL_steering"]]) / dt;
 
@@ -382,41 +290,6 @@ private:
 
 
     }
-
-    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
-    {
-        double roll, pitch, yaw;
-        quaternionToEuler(msg->pose.pose.orientation, roll, pitch, yaw);
-        x_ = msg->pose.pose.position.x;
-        y_ = msg->pose.pose.position.y;
-        theta_ = yaw;
-
-        v_x_ = msg->twist.twist.linear.x;
-        v_y_ = msg->twist.twist.linear.y;
-        omega_ = msg->twist.twist.angular.z;
-    }
-
-    void quaternionToEuler(const geometry_msgs::msg::Quaternion &q, double &roll, double &pitch, double &yaw)
-    {
-    tf2::Quaternion tf_q(q.x, q.y, q.z, q.w);
-    tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
-    }
-
-    double normalizeAngle(double angle)
-    {
-      return fmod(angle + 2.0 * M_PI, 2.0 * M_PI);
-    }
-
-    double angleError(double th_d, double th)
-    {
-    // normalize both
-      th_d = normalizeAngle(th_d);
-      th   = normalizeAngle(th);
-
-    // compute shortest difference in [-pi, pi]
-      return fmod((th_d - th + M_PI), 2.0 * M_PI) - M_PI;
-    } 
-
     void optimiseSpeedAngle(double returnSpeedAngle[], double speed, double angle) const{ 
       if(angle > (M_PI/2)){
           returnSpeedAngle[0] = -1 * speed;
@@ -441,18 +314,18 @@ private:
 
     // pub
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr torque_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr tracking_error_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr desired_trajectory_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr tau_c_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr output_trajectory_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr driving_torque_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr steering_torque_pub_;
 
     rclcpp::TimerBase::SharedPtr trajectory_timeout_timer_;
+    rclcpp::TimerBase::SharedPtr simple_trajectory_timer_;
 
     //dynamics controller
     Eigen::Vector3d v_ = Eigen::Vector3d::Zero();
     Eigen::Vector3d dotv_ = Eigen::Vector3d::Zero();
-
-    Eigen::Vector3d v_d_ = Eigen::Vector3d::Zero();
-    Eigen::Vector3d dotv_d_ = Eigen::Vector3d::Zero();
 
     sensor_msgs::msg::JointState::SharedPtr last_js_msg_;
     
@@ -462,7 +335,6 @@ private:
 
 
     // state variables
-    double x_, y_, theta_;
     double v_x_, v_y_, omega_;
     double Kp_x_, Kp_y_, Kp_th_, Kp_delta_;
     double delta_i_[4], dot_delta_i_[4];
@@ -478,6 +350,12 @@ private:
     bool recived_first_trajectory_data_ = false;
 
     std::unordered_map<std::string, size_t> joint_index_;
+
+    double t_ = 0.0;
+    double last_t_ = 0.0;
+
+    double integrator_term_;
+    double d_filt_ = 0.0;
     
 };
 

@@ -191,6 +191,7 @@ private:
 
           dot_delta_c_i[i] = (delta_c_i[i] - last_delta_c_i_[i])/dt;
           last_delta_c_i_[i] = delta_c_i[i];
+          dot_delta_c_i[i] = saturate(dot_delta_c_i[i] + Kp_delta_*(delta_c_i[i] - delta_i_[i]), -max_angular_speed, max_angular_speed);
 
           //sendingSteeringVelocity[i] = saturate(dot_delta_c_i[i] + Kp_delta_*(delta_c_i[i] - delta_i_[i]), -max_angular_speed, max_angular_speed);
 
@@ -209,7 +210,7 @@ private:
         delta_c_msg.data.push_back(delta_c_i[0]);
 
         std_msgs::msg::Float64MultiArray torque_msg;
-
+        
         //Preparing vectors for torque controller
         v_d_(0) = omega_c_i[0] * r_w[0];
         v_d_(1) = dot_delta_c_i[0];
