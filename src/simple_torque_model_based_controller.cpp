@@ -25,7 +25,7 @@ class ReducedModelBasedControllerVelocity : public rclcpp::Node
 {
 public:
     ReducedModelBasedControllerVelocity()
-    : Node("torque_controller")
+    : Node("simple_torque_controller")
     {
         // sub
         desired_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
