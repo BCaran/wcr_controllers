@@ -50,7 +50,7 @@ public:
 
         //timer
         last_t_ = this->get_clock()->now().seconds();
-        simple_trajectory_timer_ = this->create_wall_timer(10ms, std::bind(&ReducedModelBasedControllerVelocity::simpleTrajectory, this));
+        simple_trajectory_timer_ = this->create_wall_timer(2ms, std::bind(&ReducedModelBasedControllerVelocity::simpleTrajectory, this));
 
         this->declare_parameter("m", 5190.0);
         this->declare_parameter("m_w", 32.03);
@@ -64,10 +64,10 @@ public:
         this->declare_parameter("Kd_2", 1.0);
         this->declare_parameter("Kd_3", 1.0);
 
-        this->declare_parameter("Kp", 0.0);
-        this->declare_parameter("Ki", 0.0);
-        this->declare_parameter("Kd", 0.0);
-        this->declare_parameter("N", 100.0);
+        this->declare_parameter("Kp", 1.0);
+        this->declare_parameter("Ki", 0.1);
+        this->declare_parameter("B_ff", 0.2);
+        this->declare_parameter("Kaw", 0.1);
 
         this->declare_parameter("v", 0.0);
 
@@ -88,7 +88,7 @@ private:
       //if (t_ > end_time){
       //  return;
       //}
-      double v1_d =  this->get_parameter("v").as_double();//sin(t_/10)/20;//0.05 - cos(t_/20)/20;
+      double v1_d =  sin(t_/10)/20;//0.05 - cos(t_/20)/20;
       double omega1_d = 0.0;//sin(t_/20)/400;
       double omega2_d = 0.0;//-sin(t_/20)/400;
 
@@ -130,35 +130,33 @@ private:
       output_trajectory_pub_ ->publish(output);   
     }
 
-    double PIController(double refrence, double measurment, double dt, double u_max, double u_min)
+    double PIController(double reference, double measurement, double dt, double u_max, double u_min)
     {
-      double Kp = this->get_parameter("Kp").as_double();
-      double Ki = this->get_parameter("Ki").as_double();
-      double Kd = this->get_parameter("Kd").as_double();
-      double N = this->get_parameter("N").as_double();
+    double Kp   = this->get_parameter("Kp").as_double();
+    double Ki   = this->get_parameter("Ki").as_double();
+    double B_ff = this->get_parameter("B_ff").as_double();
+    double Kaw  = this->get_parameter("Kaw").as_double();  // <-- new anti-windup gain (set ≈ Ki/Kp)
 
-      double e = refrence - measurment;
+    double e = reference - measurement;
 
-      double u_p = Kp * e;
-      integrator_term_ += Ki * e * dt;
-      double d_meas = N * (measurment - d_filt_);
-      d_filt_ += N * dt * (measurment - d_filt_);
-      double u_d = -Kd * d_meas;
+    // feed-forward
+    double tau_ff = B_ff * reference;
 
-      double u = u_p + integrator_term_ + u_d;
-      if (u > u_max)
-      {
-          u = u_max;
-          if (e > 0) integrator_term_ -= Ki * e * dt; // prevent windup
-      }
-      else if (u < u_min)
-      {
-          u = u_min;
-          if (e < 0) integrator_term_ -= Ki * e * dt; // prevent windup
-      }
+    // PI (before integrator commit)
+    double u_p = Kp * e;
+    double u_i = integrator_term_;
+    double u_unsat = tau_ff + u_p + u_i;
 
-      return u;
-    }
+    // saturate
+    double u = std::clamp(u_unsat, u_min, u_max);
+
+    // back-calculation anti-windup
+    integrator_term_ += (Ki * e + Kaw * (u - u_unsat)) * dt;
+
+    return u;
+}   
+
+
 
     Vector3d calculateTorques(
     double delta_f, double delta_r, double omega_f, double omega_r,
